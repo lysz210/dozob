@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package storage.v1;
+
+option go_package = "github.com/lysz210/dozob/pkg/storage:storage";
+option java_multiple_files = true;
+option java_package = "it.lysz210.akasha.dozob.api.v1";
+
+service StorageBridge {
+  rpc ReportUdevEvent (DeviceEvent) returns (EmptyResponse);
+
+  rpc StreamMountCommands (EmptyRequest) returns (stream MountCommand);
+}
+
+message Device {
+  string dev_name = 1;
+  string bus = 2;
+  string fs_uuid = 3;
+  string fs_label = 4;
+  int64 fs_size = 5;
+  string fs_type = 6;
+  string fs_version = 7;
+  string model = 8;
+  string mount_name = 9;
+}
+
+enum DeviceAction {
+  // In proto3, the first enum value must be 0 and acts as the default.
+  DEVICE_ACTION_UNSPECIFIED = 0;
+  DEVICE_ACTION_ADD = 1;
+  DEVICE_ACTION_REMOVE = 2;
+}
+
+message DeviceEvent {
+  DeviceAction action = 1;
+  Device device = 2;
+}
+
+message MountCommand {
+  Device device = 1;
+}
+
+message EmptyRequest {}
+message EmptyResponse {}
