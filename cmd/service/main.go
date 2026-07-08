@@ -7,6 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/lysz210/dozob/internal/config"
 	"github.com/lysz210/dozob/internal/storage"
 )
@@ -25,35 +28,58 @@ func main() {
 		cancel()
 	}()
 
+	grpcConn, err := grpc.NewClient(cfg.GRPCServerAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("Did not connect: %v", err)
+	}
+	defer grpcConn.Close()
+
+	storageProcessor := storage.NewProcessor(grpcConn)
+
 	storageEventChan := make(chan storage.DeviceEvent)
+	mountDeviceChan := make(chan storage.Device)
 
 	go storage.ListenForFsPartitions(ctx, storageEventChan)
+
+	go storageProcessor.StartCommandStream(ctx, mountDeviceChan)
 
 	devices := make(map[string]storage.Device)
 
 	for {
 		select {
-		case storageDevice, ok := <-storageEventChan:
+		case deviceEvent, ok := <-storageEventChan:
 			if !ok {
 				log.Println("Storage event channel closed.")
 				return
 			}
-			log.Printf("Storage Device Detected: %+v\n", storageDevice)
-			switch storageDevice.Action {
+			log.Printf("Storage Device Detected: %+v\n", deviceEvent)
+			err := storageProcessor.HandleDeviceEvent(ctx, deviceEvent)
+			if err != nil {
+				log.Printf("Failed to report udev event: %v", err)
+			}
+			switch deviceEvent.Action {
 			case storage.StorageDeviceAdd:
-				devices[storageDevice.Device.DevName] = storageDevice.Device
-				log.Printf("Device added: %s", storageDevice.Device.DevName)
-				mountedDir, err := storage.MountDevice(storageDevice.Device, cfg.GalleryBasePath)
-				if err != nil {
-					log.Printf("Failed to mount device %s: %v", storageDevice.Device.DevName, err)
-				} else {
-					log.Printf("Device %s mounted successfully at %s", storageDevice.Device.DevName, mountedDir)
-				}
+				devices[deviceEvent.Device.DevName] = deviceEvent.Device
+				log.Printf("Device added: %s", deviceEvent.Device.DevName)
 			case storage.StorageDeviceRemove:
-				delete(devices, storageDevice.Device.DevName)
-				log.Printf("Device removed: %s", storageDevice.Device.DevName)
+				delete(devices, deviceEvent.Device.DevName)
+				log.Printf("Device removed: %s", deviceEvent.Device.DevName)
 			default:
-				log.Printf("Unhandled action: %s for device: %s", storageDevice.Action, storageDevice.Device.DevName)
+				log.Printf("Unhandled action: %s for device: %s", deviceEvent.Action, deviceEvent.Device.DevName)
+			}
+		case mountDevice, ok := <-mountDeviceChan:
+			if !ok {
+				log.Println("Mount device channel closed.")
+				return
+			}
+			log.Printf("Received mount command for device: %+v\n", mountDevice)
+			log.Printf("Mounted on: %s", cfg.GalleryBasePath)
+
+			mountedDir, err := storage.MountDevice(mountDevice, cfg.GalleryBasePath)
+			if err != nil {
+				log.Printf("Failed to mount device %s: %v", mountDevice.DevName, err)
+			} else {
+				log.Printf("Device %s mounted successfully at %s", mountDevice.DevName, mountedDir)
 			}
 		case <-ctx.Done():
 			log.Println("Context canceled, exiting main loop.")
